@@ -101,7 +101,7 @@ func main() {
 	r.HandleFunc("/", indexHandler).Methods("GET")
 	r.HandleFunc("/api/search", searchHandler).Methods("POST")
 
-	fmt.Println("Starting subdomain discovery server on :8080")
+	fmt.Println("Starting subdomain discovery server on :9382")
 	fmt.Println("Visit http://localhost:9382 to use the tool")
 
 	log.Fatal(http.ListenAndServe(":9382", r))
