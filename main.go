@@ -97,14 +97,14 @@ const indexHTML = `
 
 func main() {
 	r := mux.NewRouter()
-	
+
 	r.HandleFunc("/", indexHandler).Methods("GET")
 	r.HandleFunc("/api/search", searchHandler).Methods("POST")
-	
+
 	fmt.Println("Starting subdomain discovery server on :8080")
-	fmt.Println("Visit http://localhost:8080 to use the tool")
-	
-	log.Fatal(http.ListenAndServe(":8080", r))
+	fmt.Println("Visit http://localhost:9382 to use the tool")
+
+	log.Fatal(http.ListenAndServe(":9382", r))
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -116,30 +116,30 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Domain string `json:"domain"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	domain := strings.TrimSpace(req.Domain)
 	if domain == "" {
 		sendErrorResponse(w, "Domain is required")
 		return
 	}
-	
+
 	if !isValidDomain(domain) {
 		sendErrorResponse(w, "Invalid domain format")
 		return
 	}
-	
+
 	subdomains := discoverSubdomains(domain)
-	
+
 	response := SearchResponse{
 		Domain:     domain,
 		Subdomains: subdomains,
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -159,11 +159,11 @@ func discoverSubdomains(domain string) []SubdomainResult {
 	var results []SubdomainResult
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	
+
 	subdomainSet := make(map[string]bool)
-	
+
 	wg.Add(2)
-	
+
 	go func() {
 		defer wg.Done()
 		ctSubdomains := getCTSubdomains(domain)
@@ -179,7 +179,7 @@ func discoverSubdomains(domain string) []SubdomainResult {
 		}
 		mutex.Unlock()
 	}()
-	
+
 	go func() {
 		defer wg.Done()
 		dnsSubdomains := getDNSSubdomains(domain)
@@ -195,8 +195,8 @@ func discoverSubdomains(domain string) []SubdomainResult {
 		}
 		mutex.Unlock()
 	}()
-	
+
 	wg.Wait()
-	
+
 	return results
 }
