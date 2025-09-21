@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,83 +24,18 @@ type SearchResponse struct {
 	Error      string            `json:"error,omitempty"`
 }
 
-const indexHTML = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Subdomain Discovery Tool</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        input[type="text"] { padding: 10px; width: 300px; margin-right: 10px; }
-        button { padding: 10px 20px; background: #007cba; color: white; border: none; cursor: pointer; }
-        button:hover { background: #005a87; }
-        .results { margin-top: 30px; }
-        .subdomain { padding: 5px; margin: 2px 0; background: #f5f5f5; border-radius: 3px; }
-        .error { color: red; padding: 10px; background: #ffe6e6; border-radius: 3px; }
-        .loading { color: #007cba; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Subdomain Discovery Tool</h1>
-        <p>Enter a domain to discover subdomains using Certificate Transparency logs and DNS enumeration.</p>
-        
-        <form onsubmit="searchSubdomains(event)">
-            <input type="text" id="domain" placeholder="example.com" required>
-            <button type="submit">Search Subdomains</button>
-        </form>
-        
-        <div id="results" class="results"></div>
-    </div>
-
-    <script>
-        async function searchSubdomains(event) {
-            event.preventDefault();
-            const domain = document.getElementById('domain').value.trim();
-            const resultsDiv = document.getElementById('results');
-            
-            resultsDiv.innerHTML = '<div class="loading">Searching for subdomains...</div>';
-            
-            try {
-                const response = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ domain: domain })
-                });
-                
-                const data = await response.json();
-                
-                if (data.error) {
-                    resultsDiv.innerHTML = '<div class="error">' + data.error + '</div>';
-                    return;
-                }
-                
-                if (data.subdomains.length === 0) {
-                    resultsDiv.innerHTML = '<div>No subdomains found for ' + domain + '</div>';
-                    return;
-                }
-                
-                let html = '<h3>Found ' + data.subdomains.length + ' subdomains for ' + domain + ':</h3>';
-                data.subdomains.forEach(function(result) {
-                    html += '<div class="subdomain"><strong>' + result.subdomain + '</strong> <small>(' + result.source + ')</small></div>';
-                });
-                
-                resultsDiv.innerHTML = html;
-            } catch (error) {
-                resultsDiv.innerHTML = '<div class="error">Error: ' + error.message + '</div>';
-            }
-        }
-    </script>
-</body>
-</html>
-`
-
 func main() {
 	r := mux.NewRouter()
 
 	r.HandleFunc("/", indexHandler).Methods("GET")
+	r.HandleFunc("/blog", blogHandler).Methods("GET")
+	r.HandleFunc("/blog/", blogHandler).Methods("GET")
+	r.HandleFunc("/blog/{slug}", articleHandler).Methods("GET")
 	r.HandleFunc("/api/search", searchHandler).Methods("POST")
+	r.HandleFunc("/api/stream", streamHandler).Methods("POST")
+
+	// Serve static files
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
 	fmt.Println("Starting subdomain discovery server on :9382")
 	fmt.Println("Visit http://localhost:9382 to use the tool")
@@ -108,8 +44,24 @@ func main() {
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, indexHTML)
+	http.ServeFile(w, r, filepath.Join("static", "index.html"))
+}
+
+func blogHandler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join("static", "blog.html"))
+}
+
+func articleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	slug := vars["slug"]
+
+	articlePath := filepath.Join("static", "articles", slug+".html")
+	if _, err := filepath.Abs(articlePath); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.ServeFile(w, r, articlePath)
 }
 
 func searchHandler(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +105,84 @@ func sendErrorResponse(w http.ResponseWriter, message string) {
 func isValidDomain(domain string) bool {
 	domainRegex := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,})$`)
 	return domainRegex.MatchString(domain)
+}
+
+func streamHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Domain string `json:"domain"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		http.Error(w, "Domain is required", http.StatusBadRequest)
+		return
+	}
+
+	if !isValidDomain(domain) {
+		http.Error(w, "Invalid domain format", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	resultChan := make(chan SubdomainResult, 100)
+	done := make(chan bool, 2)
+	subdomainSet := make(map[string]bool)
+	var mutex sync.Mutex
+
+	go func() {
+		ctSubdomains := getCTSubdomains(domain)
+		for _, subdomain := range ctSubdomains {
+			mutex.Lock()
+			if !subdomainSet[subdomain] {
+				subdomainSet[subdomain] = true
+				resultChan <- SubdomainResult{
+					Subdomain: subdomain,
+					Source:    "Certificate Transparency",
+				}
+			}
+			mutex.Unlock()
+		}
+		done <- true
+	}()
+
+	go func() {
+		dnsSubdomains := getDNSSubdomainsStreaming(domain, resultChan, &subdomainSet, &mutex)
+		_ = dnsSubdomains
+		done <- true
+	}()
+
+	go func() {
+		completedSources := 0
+		for completedSources < 2 {
+			<-done
+			completedSources++
+		}
+		close(resultChan)
+	}()
+
+	for result := range resultChan {
+		data, _ := json.Marshal(result)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	fmt.Fprintf(w, "event: complete\ndata: {\"message\": \"Search completed\"}\n\n")
+	flusher.Flush()
 }
 
 func discoverSubdomains(domain string) []SubdomainResult {

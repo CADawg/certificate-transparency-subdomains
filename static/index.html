@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subdomain Discovery Tool</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <nav class="main-nav">
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Tool</a>
+                <a href="/blog" class="nav-link">Blog</a>
+            </div>
+        </nav>
+
+        <header>
+            <h1>🔍 Subdomain Discovery Tool</h1>
+            <p>Discover subdomains using Certificate Transparency logs and DNS enumeration with real-time streaming results.</p>
+        </header>
+
+        <main>
+            <form id="searchForm" class="search-form">
+                <div class="input-group">
+                    <input type="text" id="domain" placeholder="example.com" required autocomplete="off">
+                    <button type="submit" id="searchBtn">
+                        <span class="btn-text">Search Subdomains</span>
+                        <span class="btn-spinner" style="display: none;">⚪</span>
+                    </button>
+                </div>
+            </form>
+
+            <div id="results" class="results">
+                <div class="welcome-message">
+                    <h3>👋 Welcome!</h3>
+                    <p>Enter a domain above to start discovering subdomains. Results will appear here in real-time as they're found.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script defer data-domain="subdomains.dbuidl.com" src="https://a.dbuidl.com/js/script.js"></script>
+</body>
+</html>
